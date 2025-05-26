@@ -1,1 +1,12 @@
 streamlit
+opencv-python
+imgaug
+numpy
+pandas
+Pillow
+scikit-learn
+reportlab
+facenet-pytorch==2.5.2
+torch==2.5.0
+pillow
+openpyxl
