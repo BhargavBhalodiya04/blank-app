@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from imgaug import augmenters as iaa
-import streamlit as st
 import shutil
+import streamlit as st
 
 STUDENT_DB = "students.csv"
 STUDENT_IMAGES_DIR = "student_images"
@@ -31,13 +31,10 @@ def detect_and_crop_face(image_np):
     gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
-
     if len(faces) == 0:
         return None
-
     x, y, w, h = faces[0]
-    cropped_face = image_np[y:y+h, x:x+w]
-    return cropped_face
+    return image_np[y:y+h, x:x+w]
 
 def generate_augmented_images(image, count=100):
     seq = iaa.Sequential([
@@ -48,23 +45,21 @@ def generate_augmented_images(image, count=100):
         iaa.LinearContrast((0.75, 1.5))
     ])
     images = [image] * count
-    augmented_images = seq(images=images)
-    return augmented_images
+    return seq(images=images)
 
 def save_image(image_array, path):
-    img = Image.fromarray(image_array)
-    img.save(path)
+    Image.fromarray(image_array).save(path)
 
 def add_student(enrollment, name, student_class, uploaded_image):
     try:
         image_np = read_image_from_bytes(uploaded_image)
         cropped_face = detect_and_crop_face(image_np)
-
         if cropped_face is None:
             return False, "No face detected in the uploaded image."
 
         clean_name = name.strip().replace(" ", "_")
-        clean_class = student_class.strip().replace(" ", "_")
+        clean_class = str(student_class).strip().replace(" ", "_") if pd.notna(student_class) else "Unknown_Class"
+
         class_folder = os.path.join(STUDENT_IMAGES_DIR, clean_class)
         create_folder_if_not_exists(class_folder)
 
@@ -74,31 +69,71 @@ def add_student(enrollment, name, student_class, uploaded_image):
         students_df = load_students()
         student_exists = enrollment in students_df["Enrollment"].values
 
-        # Check for existing student folder
         if folder_exists or student_exists:
             st.warning(f"Student with enrollment '{enrollment}' already exists.")
-            choice = st.radio(f"Do you want to overwrite data for {enrollment} - {name}?", ("No", "Yes"))
+            choice = st.radio(f"Overwrite data for {enrollment} - {name}?", ("No", "Yes"))
             if choice == "No":
-                return False, "Registration cancelled by user."
-            elif folder_exists:
+                return False, "Registration cancelled."
+            if folder_exists:
                 shutil.rmtree(student_folder)
                 create_folder_if_not_exists(student_folder)
-                students_df = students_df[students_df["Enrollment"] != enrollment]  # remove old record
-
+                students_df = students_df[students_df["Enrollment"] != enrollment]
         else:
             create_folder_if_not_exists(student_folder)
 
-        # Generate 100 augmented images
         augmented_images = generate_augmented_images(cropped_face, count=100)
         for i, aug_img in enumerate(augmented_images):
             save_path = os.path.join(student_folder, f"{enrollment}_{clean_name}_{i+1}.jpg")
             save_image(aug_img, save_path)
 
-        new_student = pd.DataFrame([[enrollment, name, student_class.strip()]], columns=["Enrollment", "Name", "Class"])
+        new_student = pd.DataFrame([[enrollment, name, clean_class]], columns=["Enrollment", "Name", "Class"])
         students_df = pd.concat([students_df, new_student], ignore_index=True)
         save_students(students_df)
 
-        return True, f"Student added successfully! 100 augmented face images saved in folder '{student_folder}'."
-
+        return True, f"Student added successfully! 100 augmented images saved in '{student_folder}'."
     except Exception as e:
         return False, f"Error: {str(e)}"
+
+def remove_student_by_enrollment(enrollment):
+    students_df = load_students()
+    if students_df.empty:
+        return False, "No students found in database."
+    if enrollment not in students_df["Enrollment"].values:
+        return False, f"Enrollment '{enrollment}' not found."
+
+    student_row = students_df[students_df["Enrollment"] == enrollment]
+    name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
+    student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
+
+    student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment}_{name}")
+    if os.path.exists(student_folder):
+        shutil.rmtree(student_folder)
+
+    students_df = students_df[students_df["Enrollment"] != enrollment]
+    save_students(students_df)
+
+    return True, f"Student '{enrollment}' removed successfully."
+
+def clean_orphaned_student_folders():
+    students_df = load_students()
+    enrollments_in_db = set(students_df["Enrollment"].astype(str).tolist())
+    removed = []
+
+    if not os.path.exists(STUDENT_IMAGES_DIR):
+        return "Student images directory does not exist."
+
+    for class_folder in os.listdir(STUDENT_IMAGES_DIR):
+        class_folder_path = os.path.join(STUDENT_IMAGES_DIR, class_folder)
+        if os.path.isdir(class_folder_path):
+            for student_folder in os.listdir(class_folder_path):
+                student_folder_path = os.path.join(class_folder_path, student_folder)
+                if os.path.isdir(student_folder_path):
+                    enrollment = student_folder.split("_")[0]
+                    if enrollment not in enrollments_in_db:
+                        shutil.rmtree(student_folder_path)
+                        removed.append(student_folder_path)
+
+    if removed:
+        return "Removed orphaned student folders:\n" + "\n".join(removed)
+    else:
+        return "No orphaned student folders found."

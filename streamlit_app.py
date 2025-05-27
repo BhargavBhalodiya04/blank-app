@@ -8,6 +8,8 @@ from PIL import Image
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from io import BytesIO
+import shutil
+
 
 from student_manager import add_student, load_students, save_students
 
@@ -30,12 +32,14 @@ menu_option = st.sidebar.radio(
 
 st.markdown("## **Face Recognition Attendance System**")
 
+# --- Train Model ---
 if menu_option == "Train Model":
     st.markdown("### Train Face Recognition Model")
     if st.button("Train Now"):
         # TODO: Insert your actual training logic here
         st.success("Model training completed successfully!")
 
+# --- Add Student ---
 elif menu_option == "Add Student":
     st.markdown("### Add New Student")
     st.markdown("#### Upload Student Image")
@@ -59,33 +63,38 @@ elif menu_option == "Add Student":
                 else:
                     st.error(msg)
 
+# --- Remove Student ---
 elif menu_option == "Remove Student":
     st.markdown("### Remove Student")
     students_df = load_students()
+
     if students_df.empty:
         st.warning("No students found in the database.")
     else:
-        enrollment_to_remove = st.selectbox("Select Enrollment Number to remove", students_df["Enrollment"].tolist())
+        enrollment_list = students_df["Enrollment"].dropna().tolist()
+        if not enrollment_list:
+            st.warning("No valid enrollment numbers available.")
+        else:
+            enrollment_to_remove = st.selectbox("Select Enrollment Number to remove", enrollment_list)
 
-        if st.button("Remove Student"):
             student_row = students_df[students_df["Enrollment"] == enrollment_to_remove]
-            if student_row.empty:
-                st.error("Student not found.")
-            else:
-                student_class = student_row.iloc[0]["Class"].strip().replace(" ", "_")
-                student_name = student_row.iloc[0]["Name"].strip().replace(" ", "_")
-                students_df = students_df[students_df["Enrollment"] != enrollment_to_remove]
-                save_students(students_df)
-
+            if not student_row.empty:
+                student_name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
+                student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
                 student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment_to_remove}_{student_name}")
-                if os.path.exists(student_folder) and os.path.isdir(student_folder):
-                    files = glob.glob(os.path.join(student_folder, "*"))
-                    for f in files:
-                        os.remove(f)
-                    os.rmdir(student_folder)
 
-                st.success(f"Student with Enrollment Number {enrollment_to_remove} removed successfully!")
+                if st.button("Remove Student"):
+                    students_df = students_df[students_df["Enrollment"] != enrollment_to_remove]
+                    save_students(students_df)
 
+                    if os.path.exists(student_folder) and os.path.isdir(student_folder):
+                        shutil.rmtree(student_folder)
+
+                    st.success(f"Student with Enrollment Number {enrollment_to_remove} removed successfully!")
+            else:
+                st.error("Student not found.")
+
+# --- Take Attendance ---
 elif menu_option == "Take Attendance":
     st.markdown("### Upload Images for Attendance")
     uploaded_images = st.file_uploader(
@@ -94,7 +103,6 @@ elif menu_option == "Take Attendance":
 
     if uploaded_images:
         st.info(f"Received {len(uploaded_images)} file(s). Processing attendance...")
-        # TODO: Add your actual face recognition and attendance logic here
 
         students_df = load_students()
         if students_df.empty:
@@ -103,7 +111,6 @@ elif menu_option == "Take Attendance":
             attendance = []
             for img in uploaded_images:
                 st.image(img, caption=f"Processed: {img.name}", use_column_width=True)
-                # Simulate attendance: mark all students present for demo
                 for _, row in students_df.iterrows():
                     attendance.append({
                         "Enrollment": row["Enrollment"],
@@ -119,6 +126,7 @@ elif menu_option == "Take Attendance":
                 attendance_df.to_excel(filepath, index=False)
                 st.success(f"Attendance marked and saved to {filename}")
 
+# --- Download PDF ---
 elif menu_option == "Download PDF":
     st.markdown("### Download Attendance Sheet as PDF")
 
