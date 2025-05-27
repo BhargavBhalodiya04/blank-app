@@ -1,5 +1,5 @@
 import os
-import shutil
+import io
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -12,7 +12,6 @@ from botocore.exceptions import NoCredentialsError
 import cv2
 import numpy as np
 from imgaug import augmenters as iaa
-import io
 
 from display_students import display_registered_students
 from student_manager import add_student, load_students, save_students
@@ -25,23 +24,8 @@ STUDENT_IMAGES_DIR = "student_images"
 os.makedirs(ATTENDANCE_DIR, exist_ok=True)
 os.makedirs(STUDENT_IMAGES_DIR, exist_ok=True)
 
-# --- AWS S3 Upload Function ---
-def upload_image_to_s3(image_file, s3_path):
-    try:
-        s3 = boto3.client(
-            "s3",
-            aws_access_key_id=st.secrets["aws"]["aws_access_key_id"],
-            aws_secret_access_key=st.secrets["aws"]["aws_secret_access_key"],
-            region_name=st.secrets["aws"]["aws_region"]
-        )
-        s3.upload_fileobj(image_file, st.secrets["aws"]["bucket_name"], s3_path)
-        return True, f"Image uploaded to S3 at {s3_path}"
-    except NoCredentialsError:
-        return False, "AWS credentials not found"
-    except Exception as e:
-        return False, str(e)
+# --- Utility Functions ---
 
-# --- Image processing helpers ---
 def read_image_from_bytes(image_file):
     image_bytes = image_file.read()
     np_arr = np.frombuffer(image_bytes, np.uint8)
@@ -64,6 +48,22 @@ def generate_augmented_images(image, count=100):
     augmented_images = seq(images=images)
     return augmented_images
 
+# --- AWS S3 Upload Function ---
+def upload_image_to_s3(image_fileobj, s3_path):
+    try:
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=st.secrets["aws"]["aws_access_key_id"],
+            aws_secret_access_key=st.secrets["aws"]["aws_secret_access_key"],
+            region_name=st.secrets["aws"]["aws_region"]
+        )
+        s3.upload_fileobj(image_fileobj, st.secrets["aws"]["bucket_name"], s3_path)
+        return True, f"Image uploaded to S3 at {s3_path}"
+    except NoCredentialsError:
+        return False, "AWS credentials not found"
+    except Exception as e:
+        return False, str(e)
+
 # --- Sidebar Menu ---
 st.sidebar.title("Menu")
 st.sidebar.markdown("Select an action:")
@@ -82,7 +82,7 @@ if menu_option == "Train Model":
         # TODO: Insert your actual training logic here
         st.success("Model training completed successfully!")
 
-# --- Add Student (Updated for augmentation + S3 upload) ---
+# --- Add Student (augmentation + S3 upload only, no local save) ---
 elif menu_option == "Add Student":
     st.markdown("### Add New Student")
     st.markdown("#### Upload One Student Face Image (Augmentation will generate 100 images)")
@@ -123,15 +123,16 @@ elif menu_option == "Add Student":
                             continue
 
                         img_bytes = io.BytesIO(buffer.tobytes())
-                        s3_path = f"student_images/{cleaned_class}/{enrollment}_{cleaned_name}_{i+1}.jpg"
 
+                        # Upload to S3 only (no local saving)
+                        s3_path = f"student_images/{cleaned_class}/{enrollment}_{cleaned_name}/{enrollment}_{cleaned_name}_{i+1}.jpg"
                         success, msg = upload_image_to_s3(img_bytes, s3_path)
                         messages.append(f"Image {i+1}: {msg}")
                         if not success:
                             all_success = False
 
                     if all_success:
-                        add_student(enrollment, name, student_class, f"student_images/{cleaned_class}/")
+                        add_student(enrollment, name, student_class, f"student_images/{cleaned_class}/{enrollment}_{cleaned_name}/")
                         st.success(f"All 100 augmented images uploaded successfully for {name}!")
                     else:
                         st.error("Some augmented images failed to upload.")
@@ -254,7 +255,7 @@ elif menu_option == "Download PDF":
 elif menu_option == "View Students":
     display_registered_students("students.csv")
 
-# --- Optional: Clean orphaned student folders function (can add a button somewhere) ---
+# --- Optional: Clean orphaned student folders function ---
 def clean_orphaned_student_folders():
     students_df = load_students()
     enrollments_in_db = set(students_df["Enrollment"].astype(str).tolist())
