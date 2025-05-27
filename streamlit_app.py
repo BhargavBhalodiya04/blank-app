@@ -1,16 +1,14 @@
 import os
-import glob
-import numpy as np
+import shutil
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-from PIL import Image
+from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from io import BytesIO
-import shutil
+from PIL import Image
 
-
+from display_students import display_registered_students
 from student_manager import add_student, load_students, save_students
 
 # --- Config and folders ---
@@ -27,7 +25,7 @@ st.sidebar.markdown("Select an action:")
 
 menu_option = st.sidebar.radio(
     "",
-    ["Train Model", "Add Student", "Remove Student", "Take Attendance", "Download PDF"]
+    ["Train Model", "Add Student", "Remove Student", "Take Attendance", "Download PDF", "View Students"]
 )
 
 st.markdown("## **Face Recognition Attendance System**")
@@ -71,20 +69,20 @@ elif menu_option == "Remove Student":
     if students_df.empty:
         st.warning("No students found in the database.")
     else:
-        enrollment_list = students_df["Enrollment"].dropna().tolist()
+        enrollment_list = students_df["Enrollment"].dropna().astype(str).tolist()
         if not enrollment_list:
             st.warning("No valid enrollment numbers available.")
         else:
             enrollment_to_remove = st.selectbox("Select Enrollment Number to remove", enrollment_list)
 
-            student_row = students_df[students_df["Enrollment"] == enrollment_to_remove]
+            student_row = students_df[students_df["Enrollment"].astype(str) == enrollment_to_remove]
             if not student_row.empty:
                 student_name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
                 student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
                 student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment_to_remove}_{student_name}")
 
                 if st.button("Remove Student"):
-                    students_df = students_df[students_df["Enrollment"] != enrollment_to_remove]
+                    students_df = students_df[students_df["Enrollment"].astype(str) != enrollment_to_remove]
                     save_students(students_df)
 
                     if os.path.exists(student_folder) and os.path.isdir(student_folder):
@@ -152,12 +150,12 @@ elif menu_option == "Download PDF":
             row_height = 20
 
             for i, col in enumerate(df.columns):
-                c.drawString(x_start + i*120, y_start, str(col))
+                c.drawString(x_start + i * 120, y_start, str(col))
 
             y = y_start - row_height
             for idx, row in df.iterrows():
                 for i, val in enumerate(row):
-                    c.drawString(x_start + i*120, y, str(val))
+                    c.drawString(x_start + i * 120, y, str(val))
                 y -= row_height
                 if y < 40:
                     c.showPage()
@@ -174,3 +172,32 @@ elif menu_option == "Download PDF":
             )
     else:
         st.warning("No attendance Excel files found.")
+
+# --- View Registered Students ---
+elif menu_option == "View Students":
+    display_registered_students("students.csv")
+
+# --- Optional: Clean orphaned student folders function (can add a button somewhere) ---
+def clean_orphaned_student_folders():
+    students_df = load_students()
+    enrollments_in_db = set(students_df["Enrollment"].astype(str).tolist())
+    removed = []
+
+    if not os.path.exists(STUDENT_IMAGES_DIR):
+        return "Student images directory does not exist."
+
+    for class_folder in os.listdir(STUDENT_IMAGES_DIR):
+        class_folder_path = os.path.join(STUDENT_IMAGES_DIR, class_folder)
+        if os.path.isdir(class_folder_path):
+            for student_folder in os.listdir(class_folder_path):
+                student_folder_path = os.path.join(class_folder_path, student_folder)
+                if os.path.isdir(student_folder_path):
+                    enrollment = student_folder.split("_")[0]
+                    if enrollment not in enrollments_in_db:
+                        shutil.rmtree(student_folder_path)
+                        removed.append(student_folder_path)
+
+    if removed:
+        return "Removed orphaned student folders:\n" + "\n".join(removed)
+    else:
+        return "No orphaned student folders found."
