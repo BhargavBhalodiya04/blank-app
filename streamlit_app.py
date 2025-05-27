@@ -6,6 +6,9 @@ import streamlit as st
 from datetime import datetime
 from PIL import Image
 from imgaug import augmenters as iaa
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from io import BytesIO
 
 # --- Config and folders ---
 st.set_page_config(page_title="Face Recognition Attendance System", layout="wide")
@@ -21,7 +24,7 @@ def load_students():
     if os.path.exists(STUDENT_DB):
         return pd.read_csv(STUDENT_DB)
     else:
-        return pd.DataFrame(columns=["Enrollment", "Name"])
+        return pd.DataFrame(columns=["Enrollment", "Name", "Class"])
 
 def save_students(df):
     df.to_csv(STUDENT_DB, index=False)
@@ -58,11 +61,14 @@ def generate_augmented_images(image, count=100):
     augmented_images = seq(images=images)
     return augmented_images
 
-def add_student_with_augmented_images(enrollment, name, uploaded_image):
+def add_student_with_augmented_images(enrollment, name, student_class, uploaded_image):
     try:
         clean_name = name.strip().replace(" ", "_")
-        folder_name = f"{enrollment}_{clean_name}"
-        student_folder = os.path.join(STUDENT_IMAGES_DIR, folder_name)
+        clean_class = student_class.strip().replace(" ", "_")
+        # Folder path: student_images/ClassName/Enrollment_Name
+        class_folder = os.path.join(STUDENT_IMAGES_DIR, clean_class)
+        create_folder_if_not_exists(class_folder)
+        student_folder = os.path.join(class_folder, f"{enrollment}_{clean_name}")
         create_folder_if_not_exists(student_folder)
 
         img = read_image_from_bytes(uploaded_image)
@@ -75,7 +81,7 @@ def add_student_with_augmented_images(enrollment, name, uploaded_image):
             save_path = os.path.join(student_folder, f"{enrollment}_{clean_name}_{i+1}.jpg")
             save_image(aug_img, save_path)
 
-        return True, f"Student images saved successfully to folder '{folder_name}' with 100 augmented images."
+        return True, f"Student images saved successfully to folder '{student_folder}' with 100 augmented images."
 
     except Exception as e:
         return False, f"Error: {str(e)}"
@@ -105,12 +111,13 @@ elif menu_option == "Add Student":
     with st.form("add_student_form"):
         enrollment = st.text_input("Enrollment Number")
         name = st.text_input("Student Name")
+        student_class = st.text_input("Class Name (e.g. 10A, 12B)")  # Faculty writes class here
         uploaded_image = st.file_uploader("Upload Student Face Image", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Add Student")
 
         if submitted:
-            if not enrollment or not name:
-                st.error("Please provide both Enrollment Number and Name.")
+            if not enrollment or not name or not student_class:
+                st.error("Please provide Enrollment Number, Name, and Class.")
             elif not uploaded_image:
                 st.error("Please upload a student image.")
             else:
@@ -118,13 +125,13 @@ elif menu_option == "Add Student":
                 if enrollment in students_df["Enrollment"].values:
                     st.warning(f"Student with Enrollment {enrollment} already exists.")
                 else:
-                    # Save student info
-                    new_student = pd.DataFrame([[enrollment, name]], columns=["Enrollment", "Name"])
+                    # Save student info (including class)
+                    new_student = pd.DataFrame([[enrollment, name, student_class.strip()]], columns=["Enrollment", "Name", "Class"])
                     students_df = pd.concat([students_df, new_student], ignore_index=True)
                     save_students(students_df)
 
-                    # Save augmented images (100 variants)
-                    success, msg = add_student_with_augmented_images(enrollment, name, uploaded_image)
+                    # Save augmented images inside class folder
+                    success, msg = add_student_with_augmented_images(enrollment, name, student_class, uploaded_image)
                     if success:
                         st.success(msg)
                     else:
@@ -139,25 +146,27 @@ elif menu_option == "Remove Student":
         enrollment_to_remove = st.selectbox("Select Enrollment Number to remove", students_df["Enrollment"].tolist())
 
         if st.button("Remove Student"):
-            # Filter out student by Enrollment Number
-            students_df = students_df[students_df["Enrollment"] != enrollment_to_remove]
-            save_students(students_df)
+            # Find the student record to get class and name for folder path
+            student_row = students_df[students_df["Enrollment"] == enrollment_to_remove]
+            if student_row.empty:
+                st.error("Student not found.")
+            else:
+                student_class = student_row.iloc[0]["Class"].strip().replace(" ", "_")
+                student_name = student_row.iloc[0]["Name"].strip().replace(" ", "_")
+                # Remove from CSV
+                students_df = students_df[students_df["Enrollment"] != enrollment_to_remove]
+                save_students(students_df)
 
-            # Remove all student images matching enrollment number (e.g. 92310133004_Bhavik_1.jpg)
-            image_pattern = os.path.join(STUDENT_IMAGES_DIR, f"{enrollment_to_remove}_*")
-            files = glob.glob(image_pattern)
-            for file_path in files:
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
+                # Remove student folder inside class folder
+                student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment_to_remove}_{student_name}")
+                if os.path.exists(student_folder) and os.path.isdir(student_folder):
+                    # Remove all files inside folder
+                    files = glob.glob(os.path.join(student_folder, "*"))
+                    for f in files:
+                        os.remove(f)
+                    os.rmdir(student_folder)
 
-            # Also remove folder if empty
-            folder_pattern = os.path.join(STUDENT_IMAGES_DIR, f"{enrollment_to_remove}_*")
-            folders = glob.glob(folder_pattern)
-            for folder in folders:
-                if os.path.isdir(folder) and not os.listdir(folder):
-                    os.rmdir(folder)
-
-            st.success(f"Student with Enrollment Number {enrollment_to_remove} removed successfully!")
+                st.success(f"Student with Enrollment Number {enrollment_to_remove} removed successfully!")
 
 elif menu_option == "Take Attendance":
     st.markdown("### Upload Images for Attendance")
@@ -201,13 +210,44 @@ elif menu_option == "Download PDF":
         selected_file = st.selectbox("Select an attendance Excel file", attendance_files)
         if selected_file:
             filepath = os.path.join(ATTENDANCE_DIR, selected_file)
-            # TODO: Convert Excel to PDF or provide PDF directly
-            # For demo: download Excel file renamed as .pdf
-            with open(filepath, "rb") as f:
-                data = f.read()
+
+            # Read Excel attendance data
+            df = pd.read_excel(filepath)
+
+            # Create PDF in memory
+            pdf_buffer = BytesIO()
+            c = canvas.Canvas(pdf_buffer, pagesize=letter)
+            width, height = letter
+
+            c.setFont("Helvetica", 12)
+            c.drawString(30, height - 40, f"Attendance Sheet: {selected_file}")
+            c.drawString(30, height - 60, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # Define some initial coordinates for table
+            x_start = 30
+            y_start = height - 90
+            row_height = 20
+
+            # Draw column headers
+            for i, col in enumerate(df.columns):
+                c.drawString(x_start + i*120, y_start, str(col))
+
+            # Draw rows
+            y = y_start - row_height
+            for idx, row in df.iterrows():
+                for i, val in enumerate(row):
+                    c.drawString(x_start + i*120, y, str(val))
+                y -= row_height
+                if y < 40:  # create a new page if space runs out
+                    c.showPage()
+                    y = height - 40
+
+            c.save()
+            pdf_buffer.seek(0)
+
             st.download_button(
                 label="Download PDF",
-                data=data,
+                data=pdf_buffer,
                 file_name=selected_file.replace(".xlsx", ".pdf"),
                 mime="application/pdf"
             )

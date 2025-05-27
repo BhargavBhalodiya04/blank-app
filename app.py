@@ -1,12 +1,20 @@
 import streamlit as st
-from student_manager import add_student, remove_student
+from student_manager import add_student, remove_student, get_existing_classes
 
 st.title("Student Management")
+
+existing_classes = get_existing_classes()
 
 with st.form("add_student_form"):
     enrollment = st.text_input("Enrollment Number")
     name = st.text_input("Name")
-    student_class = st.text_input("Class (not saved)")
+
+    if existing_classes:
+        student_class = st.selectbox("Select Class", existing_classes)
+    else:
+        st.error("No classes found. Please create class folders inside 'student_images' folder.")
+        student_class = None
+
     uploaded_image = st.file_uploader("Upload Student Image", type=["jpg", "jpeg", "png"])
     submitted = st.form_submit_button("Add Student")
 
