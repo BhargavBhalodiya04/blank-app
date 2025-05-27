@@ -70,7 +70,7 @@ st.sidebar.markdown("Select an action:")
 
 menu_option = st.sidebar.radio(
     "",
-    ["Train Model", "Add Student", "Remove Student", "Take Attendance", "Download PDF", "View Students"]
+    ["Train Model", "Add Student", "Take Attendance", "Download PDF", "View Students"]
 )
 
 st.markdown("## **Face Recognition Attendance System**")
@@ -138,37 +138,6 @@ elif menu_option == "Add Student":
                         st.error("Some augmented images failed to upload.")
                     
                     st.text("\n".join(messages))
-
-# --- Remove Student ---
-elif menu_option == "Remove Student":
-    st.markdown("### Remove Student")
-    students_df = load_students()
-
-    if students_df.empty:
-        st.warning("No students found in the database.")
-    else:
-        enrollment_list = students_df["Enrollment"].dropna().astype(str).tolist()
-        if not enrollment_list:
-            st.warning("No valid enrollment numbers available.")
-        else:
-            enrollment_to_remove = st.selectbox("Select Enrollment Number to remove", enrollment_list)
-
-            student_row = students_df[students_df["Enrollment"].astype(str) == enrollment_to_remove]
-            if not student_row.empty:
-                student_name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
-                student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
-                student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment_to_remove}_{student_name}")
-
-                if st.button("Remove Student"):
-                    students_df = students_df[students_df["Enrollment"].astype(str) != enrollment_to_remove]
-                    save_students(students_df)
-
-                    if os.path.exists(student_folder) and os.path.isdir(student_folder):
-                        shutil.rmtree(student_folder)
-
-                    st.success(f"Student with Enrollment Number {enrollment_to_remove} removed successfully!")
-            else:
-                st.error("Student not found.")
 
 # --- Take Attendance ---
 elif menu_option == "Take Attendance":
@@ -253,7 +222,7 @@ elif menu_option == "Download PDF":
 
 # --- View Registered Students ---
 elif menu_option == "View Students":
-    display_registered_students("students.csv")
+    display_registered_students()
 
 # --- Optional: Clean orphaned student folders function ---
 def clean_orphaned_student_folders():

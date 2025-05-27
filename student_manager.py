@@ -100,26 +100,6 @@ def add_student(enrollment, name, student_class, uploaded_image, s3_url=None):
     except Exception as e:
         return False, f"Error: {str(e)}"
 
-def remove_student_by_enrollment(enrollment):
-    students_df = load_students()
-    if students_df.empty:
-        return False, "No students found in database."
-    if enrollment not in students_df["Enrollment"].astype(str).values:
-        return False, f"Enrollment '{enrollment}' not found."
-
-    student_row = students_df[students_df["Enrollment"].astype(str) == str(enrollment)]
-    name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
-    student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
-
-    student_folder = os.path.join(STUDENT_IMAGES_DIR, student_class, f"{enrollment}_{name}")
-    if os.path.exists(student_folder):
-        shutil.rmtree(student_folder)
-
-    students_df = students_df[students_df["Enrollment"].astype(str) != str(enrollment)]
-    save_students(students_df)
-
-    return True, f"Student '{enrollment}' removed successfully."
-
 def clean_orphaned_student_folders():
     students_df = load_students()
     enrollments_in_db = set(students_df["Enrollment"].astype(str).tolist())

@@ -1,6 +1,9 @@
 import io
 import boto3
 from botocore.exceptions import NoCredentialsError
+import openpyxl
+from openpyxl.utils import get_column_letter
+import os
 
 def upload_image_to_s3(image_bytes_io, s3_path):
     try:
@@ -18,11 +21,40 @@ def upload_image_to_s3(image_bytes_io, s3_path):
         return False, str(e)
 
 
+def append_student_to_excel(enrollment, name, excel_path="students.xlsx"):
+    """
+    Append a student entry to an Excel file.
+    If file doesn't exist, create it with header.
+
+    Args:
+        enrollment (str): Enrollment number
+        name (str): Student name
+        excel_path (str): Path to Excel file (local path)
+
+    Returns:
+        None
+    """
+    if os.path.exists(excel_path):
+        wb = openpyxl.load_workbook(excel_path)
+        ws = wb.active
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        # Create headers
+        ws.append(["Enrollment", "Name"])
+
+    # Append the new student
+    ws.append([enrollment, name])
+
+    wb.save(excel_path)
+
+
 def add_student_with_augmented_images_to_s3(enrollment, name, uploaded_image):
     """
     Generate 100 augmented images from uploaded_image and upload all to S3 under
     student_images/{class_name}/{enrollment}_{name}_{index}.jpg
-    
+    Also append student data to an Excel file.
+
     Args:
         enrollment (str): Enrollment number
         name (str): Student name (spaces replaced with underscores)
@@ -35,9 +67,7 @@ def add_student_with_augmented_images_to_s3(enrollment, name, uploaded_image):
         import streamlit as st
 
         clean_name = name.strip().replace(" ", "_")
-        # You may want to pass student_class as argument or modify this if needed
-        # For example:
-        student_class = "default_class"  # Replace this with actual class if available
+        student_class = "default_class"  # Replace if needed
 
         # Read image from bytes (OpenCV format)
         img = read_image_from_bytes(uploaded_image)
@@ -64,8 +94,11 @@ def add_student_with_augmented_images_to_s3(enrollment, name, uploaded_image):
 
         if failed_uploads:
             return False, f"Some images failed to upload: {failed_uploads}"
-        else:
-            return True, f"All 100 augmented images uploaded successfully for student {name}."
+
+        # Append student info to Excel (local file here)
+        append_student_to_excel(enrollment, name)
+
+        return True, f"All 100 augmented images uploaded successfully for student {name}."
 
     except Exception as e:
         return False, f"Error: {str(e)}"
