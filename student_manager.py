@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from imgaug import augmenters as iaa
+import streamlit as st
+import shutil
 
 STUDENT_DB = "students.csv"
 STUDENT_IMAGES_DIR = "student_images"
@@ -39,17 +41,12 @@ def detect_and_crop_face(image_np):
 
 def generate_augmented_images(image, count=100):
     seq = iaa.Sequential([
-        iaa.Fliplr(0.5),  # horizontal flips 50% chance
-        iaa.Affine(
-            rotate=(-25, 25),
-            shear=(-10, 10),
-            scale=(0.8, 1.2)
-        ),
+        iaa.Fliplr(0.5),
+        iaa.Affine(rotate=(-25, 25), shear=(-10, 10), scale=(0.8, 1.2)),
         iaa.AdditiveGaussianNoise(scale=(0, 0.05*255)),
         iaa.Multiply((0.8, 1.2)),
         iaa.LinearContrast((0.75, 1.5))
     ])
-
     images = [image] * count
     augmented_images = seq(images=images)
     return augmented_images
@@ -61,30 +58,41 @@ def save_image(image_array, path):
 def add_student(enrollment, name, student_class, uploaded_image):
     try:
         image_np = read_image_from_bytes(uploaded_image)
-
         cropped_face = detect_and_crop_face(image_np)
+
         if cropped_face is None:
             return False, "No face detected in the uploaded image."
 
         clean_name = name.strip().replace(" ", "_")
         clean_class = student_class.strip().replace(" ", "_")
-
         class_folder = os.path.join(STUDENT_IMAGES_DIR, clean_class)
         create_folder_if_not_exists(class_folder)
 
         student_folder = os.path.join(class_folder, f"{enrollment}_{clean_name}")
-        create_folder_if_not_exists(student_folder)
+        folder_exists = os.path.exists(student_folder)
 
-        # Generate 100 augmented images from cropped face
+        students_df = load_students()
+        student_exists = enrollment in students_df["Enrollment"].values
+
+        # Check for existing student folder
+        if folder_exists or student_exists:
+            st.warning(f"Student with enrollment '{enrollment}' already exists.")
+            choice = st.radio(f"Do you want to overwrite data for {enrollment} - {name}?", ("No", "Yes"))
+            if choice == "No":
+                return False, "Registration cancelled by user."
+            elif folder_exists:
+                shutil.rmtree(student_folder)
+                create_folder_if_not_exists(student_folder)
+                students_df = students_df[students_df["Enrollment"] != enrollment]  # remove old record
+
+        else:
+            create_folder_if_not_exists(student_folder)
+
+        # Generate 100 augmented images
         augmented_images = generate_augmented_images(cropped_face, count=100)
-
         for i, aug_img in enumerate(augmented_images):
             save_path = os.path.join(student_folder, f"{enrollment}_{clean_name}_{i+1}.jpg")
             save_image(aug_img, save_path)
-
-        students_df = load_students()
-        if enrollment in students_df["Enrollment"].values:
-            return False, f"Student with Enrollment {enrollment} already exists."
 
         new_student = pd.DataFrame([[enrollment, name, student_class.strip()]], columns=["Enrollment", "Name", "Class"])
         students_df = pd.concat([students_df, new_student], ignore_index=True)
