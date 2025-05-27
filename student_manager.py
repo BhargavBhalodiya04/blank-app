@@ -18,7 +18,7 @@ def load_students():
     if os.path.exists(STUDENT_DB):
         return pd.read_csv(STUDENT_DB)
     else:
-        return pd.DataFrame(columns=["Enrollment", "Name", "Class"])
+        return pd.DataFrame(columns=["Enrollment", "Name", "Class", "ImagePath"])
 
 def save_students(df):
     df.to_csv(STUDENT_DB, index=False)
@@ -50,7 +50,7 @@ def generate_augmented_images(image, count=100):
 def save_image(image_array, path):
     Image.fromarray(image_array).save(path)
 
-def add_student(enrollment, name, student_class, uploaded_image):
+def add_student(enrollment, name, student_class, uploaded_image, s3_url=None):
     try:
         image_np = read_image_from_bytes(uploaded_image)
         cropped_face = detect_and_crop_face(image_np)
@@ -67,7 +67,7 @@ def add_student(enrollment, name, student_class, uploaded_image):
         folder_exists = os.path.exists(student_folder)
 
         students_df = load_students()
-        student_exists = enrollment in students_df["Enrollment"].values
+        student_exists = enrollment in students_df["Enrollment"].astype(str).values
 
         if folder_exists or student_exists:
             st.warning(f"Student with enrollment '{enrollment}' already exists.")
@@ -77,7 +77,7 @@ def add_student(enrollment, name, student_class, uploaded_image):
             if folder_exists:
                 shutil.rmtree(student_folder)
                 create_folder_if_not_exists(student_folder)
-                students_df = students_df[students_df["Enrollment"] != enrollment]
+            students_df = students_df[students_df["Enrollment"].astype(str) != str(enrollment)]
         else:
             create_folder_if_not_exists(student_folder)
 
@@ -86,7 +86,13 @@ def add_student(enrollment, name, student_class, uploaded_image):
             save_path = os.path.join(student_folder, f"{enrollment}_{clean_name}_{i+1}.jpg")
             save_image(aug_img, save_path)
 
-        new_student = pd.DataFrame([[enrollment, name, clean_class]], columns=["Enrollment", "Name", "Class"])
+        new_student = pd.DataFrame([{
+            "Enrollment": enrollment,
+            "Name": name,
+            "Class": clean_class,
+            "ImagePath": s3_url if s3_url else ""
+        }])
+
         students_df = pd.concat([students_df, new_student], ignore_index=True)
         save_students(students_df)
 
@@ -98,10 +104,10 @@ def remove_student_by_enrollment(enrollment):
     students_df = load_students()
     if students_df.empty:
         return False, "No students found in database."
-    if enrollment not in students_df["Enrollment"].values:
+    if enrollment not in students_df["Enrollment"].astype(str).values:
         return False, f"Enrollment '{enrollment}' not found."
 
-    student_row = students_df[students_df["Enrollment"] == enrollment]
+    student_row = students_df[students_df["Enrollment"].astype(str) == str(enrollment)]
     name = str(student_row.iloc[0]["Name"]).strip().replace(" ", "_")
     student_class = str(student_row.iloc[0]["Class"]).strip().replace(" ", "_")
 
@@ -109,7 +115,7 @@ def remove_student_by_enrollment(enrollment):
     if os.path.exists(student_folder):
         shutil.rmtree(student_folder)
 
-    students_df = students_df[students_df["Enrollment"] != enrollment]
+    students_df = students_df[students_df["Enrollment"].astype(str) != str(enrollment)]
     save_students(students_df)
 
     return True, f"Student '{enrollment}' removed successfully."

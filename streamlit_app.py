@@ -7,6 +7,12 @@ from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from PIL import Image
+import boto3
+from botocore.exceptions import NoCredentialsError
+import cv2
+import numpy as np
+from imgaug import augmenters as iaa
+import io
 
 from display_students import display_registered_students
 from student_manager import add_student, load_students, save_students
@@ -18,6 +24,45 @@ ATTENDANCE_DIR = "attendance_files"
 STUDENT_IMAGES_DIR = "student_images"
 os.makedirs(ATTENDANCE_DIR, exist_ok=True)
 os.makedirs(STUDENT_IMAGES_DIR, exist_ok=True)
+
+# --- AWS S3 Upload Function ---
+def upload_image_to_s3(image_file, s3_path):
+    try:
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=st.secrets["aws"]["aws_access_key_id"],
+            aws_secret_access_key=st.secrets["aws"]["aws_secret_access_key"],
+            region_name=st.secrets["aws"]["aws_region"]
+        )
+        s3.upload_fileobj(image_file, st.secrets["aws"]["bucket_name"], s3_path)
+        return True, f"Image uploaded to S3 at {s3_path}"
+    except NoCredentialsError:
+        return False, "AWS credentials not found"
+    except Exception as e:
+        return False, str(e)
+
+# --- Image processing helpers ---
+def read_image_from_bytes(image_file):
+    image_bytes = image_file.read()
+    np_arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    return img
+
+def generate_augmented_images(image, count=100):
+    seq = iaa.Sequential([
+        iaa.Fliplr(0.5),
+        iaa.Affine(
+            rotate=(-25, 25),
+            shear=(-10, 10),
+            scale=(0.8, 1.2)
+        ),
+        iaa.AdditiveGaussianNoise(scale=(0, 0.05*255)),
+        iaa.Multiply((0.8, 1.2)),
+        iaa.LinearContrast((0.75, 1.5)),
+    ])
+    images = [image] * count
+    augmented_images = seq(images=images)
+    return augmented_images
 
 # --- Sidebar Menu ---
 st.sidebar.title("Menu")
@@ -37,16 +82,20 @@ if menu_option == "Train Model":
         # TODO: Insert your actual training logic here
         st.success("Model training completed successfully!")
 
-# --- Add Student ---
+# --- Add Student (Updated for augmentation + S3 upload) ---
 elif menu_option == "Add Student":
     st.markdown("### Add New Student")
-    st.markdown("#### Upload Student Image")
+    st.markdown("#### Upload One Student Face Image (Augmentation will generate 100 images)")
 
     with st.form("add_student_form"):
         enrollment = st.text_input("Enrollment Number")
         name = st.text_input("Student Name")
         student_class = st.text_input("Class Name (e.g. 10A, 12B)")
-        uploaded_image = st.file_uploader("Upload Student Face Image", type=["jpg", "jpeg", "png"])
+        uploaded_image = st.file_uploader(
+            "Upload One Student Face Image",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=False
+        )
         submitted = st.form_submit_button("Add Student")
 
         if submitted:
@@ -55,11 +104,39 @@ elif menu_option == "Add Student":
             elif not uploaded_image:
                 st.error("Please upload a student image.")
             else:
-                success, msg = add_student(enrollment, name, student_class, uploaded_image)
-                if success:
-                    st.success(msg)
+                cleaned_name = name.strip().replace(" ", "_")
+                cleaned_class = student_class.strip().replace(" ", "_")
+
+                img = read_image_from_bytes(uploaded_image)
+                if img is None:
+                    st.error("Failed to read the uploaded image.")
                 else:
-                    st.error(msg)
+                    augmented_images = generate_augmented_images(img, count=100)
+                    all_success = True
+                    messages = []
+
+                    for i, aug_img in enumerate(augmented_images):
+                        is_success, buffer = cv2.imencode(".jpg", aug_img)
+                        if not is_success:
+                            messages.append(f"Image {i+1}: encoding failed")
+                            all_success = False
+                            continue
+
+                        img_bytes = io.BytesIO(buffer.tobytes())
+                        s3_path = f"student_images/{cleaned_class}/{enrollment}_{cleaned_name}_{i+1}.jpg"
+
+                        success, msg = upload_image_to_s3(img_bytes, s3_path)
+                        messages.append(f"Image {i+1}: {msg}")
+                        if not success:
+                            all_success = False
+
+                    if all_success:
+                        add_student(enrollment, name, student_class, f"student_images/{cleaned_class}/")
+                        st.success(f"All 100 augmented images uploaded successfully for {name}!")
+                    else:
+                        st.error("Some augmented images failed to upload.")
+                    
+                    st.text("\n".join(messages))
 
 # --- Remove Student ---
 elif menu_option == "Remove Student":
